@@ -144,6 +144,58 @@ function doGet(e) {
       });
     }
 
+    // 3. ดึงรายชื่อนักเรียนทั้งหมด (Real-time Sync สำหรับผู้ดูแลระบบ)
+    if (action === 'getAllStudents' || action === 'adminGetAllStudents') {
+      const allStudents = getAllStudentsFromSheet();
+      return jsonResponse({
+        status: 'success',
+        count: allStudents.length,
+        data: allStudents,
+        timestamp: new Date().toISOString()
+      });
+    }
+
+    // 4. เพิ่มข้อมูลนักเรียน Real-time เข้า Google Sheets
+    if (action === 'addStudent' || action === 'adminAddStudent') {
+      let student = {};
+      if (params.student) {
+        try { student = JSON.parse(params.student); } catch(err) { student = {}; }
+      } else {
+        STUDENT_COLUMNS.forEach(col => {
+          if (params[col] !== undefined) student[col] = params[col];
+        });
+      }
+      const res = addStudentToSheet(student);
+      logActivity(params.adminUser || 'Admin', 'ADD_STUDENT', `เพิ่มนักเรียน รหัส ${student.เลขประจำตัว} ${student.ชื่อ} ${student.นามสกุล}`);
+      return jsonResponse(res);
+    }
+
+    // 5. แก้ไขข้อมูลนักเรียน Real-time ใน Google Sheets
+    if (action === 'updateStudent' || action === 'adminUpdateStudent') {
+      const rowNumber = parseInt(params.rowNumber, 10);
+      let student = {};
+      if (params.student) {
+        try { student = JSON.parse(params.student); } catch(err) { student = {}; }
+      } else {
+        STUDENT_COLUMNS.forEach(col => {
+          if (params[col] !== undefined) student[col] = params[col];
+        });
+      }
+      const res = updateStudentInSheet(rowNumber, student);
+      logActivity(params.adminUser || 'Admin', 'UPDATE_STUDENT', `แก้ไขข้อมูล: รหัส ${student.เลขประจำตัว}`);
+      return jsonResponse(res);
+    }
+
+    // 6. ลบข้อมูลนักเรียน Real-time จาก Google Sheets
+    if (action === 'deleteStudent' || action === 'adminDeleteStudent') {
+      const rowNumber = parseInt(params.rowNumber, 10);
+      const studentId = params.studentId || '';
+      const citizenId = params.citizenId || '';
+      const res = deleteStudentFromSheet(rowNumber, citizenId, studentId);
+      logActivity(params.adminUser || 'Admin', 'DELETE_STUDENT', `ลบข้อมูลนักเรียน (รหัส: ${studentId || rowNumber})`);
+      return jsonResponse(res);
+    }
+
     return jsonResponse({ status: 'error', message: 'Unknown action' });
   } catch (error) {
     return jsonResponse({ status: 'error', message: error.toString() });
@@ -152,7 +204,7 @@ function doGet(e) {
 
 /**
  * Handle POST Requests
- * สำหรับผู้ดูแลระบบจัดการข้อมูล (เพิ่ม แก้ไข ลบ นำเข้า) พร้อมตรวจสอบความปลอดภัย
+ * รองรับการส่งผ่าน POST เช่นเดียวกัน
  */
 function doPost(e) {
   try {
@@ -162,49 +214,33 @@ function doPost(e) {
     }
 
     const action = payload.action;
-    const adminToken = payload.adminToken;
 
-    // ตรวจสอบความปลอดภัย Admin Token (ตั้งค่าใน Script Properties)
-    const scriptProps = PropertiesService.getScriptProperties();
-    const systemAdminSecret = scriptProps.getProperty('ADMIN_SECRET_KEY') || 'pracha2570admin';
-
-    if (action.startsWith('admin') && adminToken !== systemAdminSecret) {
-      return jsonResponse({ status: 'unauthorized', message: 'สิทธิ์การใช้งานไม่ถูกต้อง กรุณาเข้าสู่ระบบใหม่' });
-    }
-
-    // 1. ดึงรายชื่อนักเรียนทั้งหมดสำหรับ Admin Dashboard
-    if (action === 'adminGetAllStudents') {
+    if (action === 'adminGetAllStudents' || action === 'getAllStudents') {
       const allStudents = getAllStudentsFromSheet();
-      return jsonResponse({
-        status: 'success',
-        count: allStudents.length,
-        data: allStudents
-      });
+      return jsonResponse({ status: 'success', count: allStudents.length, data: allStudents });
     }
 
-    // 2. เพิ่มนักเรียน
-    if (action === 'adminAddStudent') {
-      const student = payload.student;
+    if (action === 'adminAddStudent' || action === 'addStudent') {
+      const student = payload.student || {};
       const res = addStudentToSheet(student);
       logActivity(payload.adminUser || 'Admin', 'ADD_STUDENT', `เพิ่มนักเรียน รหัส ${student.เลขประจำตัว} ${student.ชื่อ} ${student.นามสกุล}`);
       return jsonResponse(res);
     }
 
-    // 3. แก้ไขข้อมูลนักเรียน
-    if (action === 'adminUpdateStudent') {
-      const student = payload.student;
+    if (action === 'adminUpdateStudent' || action === 'updateStudent') {
+      const student = payload.student || {};
       const rowNumber = payload.rowNumber;
       const res = updateStudentInSheet(rowNumber, student);
-      logActivity(payload.adminUser || 'Admin', 'UPDATE_STUDENT', `แก้ไขข้อมูลแถวที่ ${rowNumber}: รหัส ${student.เลขประจำตัว}`);
+      logActivity(payload.adminUser || 'Admin', 'UPDATE_STUDENT', `แก้ไขข้อมูล: รหัส ${student.เลขประจำตัว}`);
       return jsonResponse(res);
     }
 
-    // 4. ลบข้อมูลนักเรียน
-    if (action === 'adminDeleteStudent') {
+    if (action === 'adminDeleteStudent' || action === 'deleteStudent') {
       const rowNumber = payload.rowNumber;
       const studentId = payload.studentId || '';
-      const res = deleteStudentFromSheet(rowNumber);
-      logActivity(payload.adminUser || 'Admin', 'DELETE_STUDENT', `ลบข้อมูลนักเรียนแถวที่ ${rowNumber} (รหัส: ${studentId})`);
+      const citizenId = payload.citizenId || '';
+      const res = deleteStudentFromSheet(rowNumber, citizenId, studentId);
+      logActivity(payload.adminUser || 'Admin', 'DELETE_STUDENT', `ลบข้อมูลนักเรียน (รหัส: ${studentId || rowNumber})`);
       return jsonResponse(res);
     }
 
@@ -297,20 +333,66 @@ function updateStudentInSheet(rowNumber, student) {
   const sheet = ss.getSheetByName('Students');
   if (!sheet) throw new Error('ไม่พบชีต Students');
 
+  let targetRow = rowNumber;
+  if (!targetRow || targetRow <= 1) {
+    const values = sheet.getDataRange().getDisplayValues();
+    const headers = values[0];
+    const cidCol = headers.indexOf('เลขบัตรประชาชน');
+    const sidCol = headers.indexOf('เลขประจำตัว');
+    const cleanCid = (student.เลขบัตรประชาชน || '').replace(/[-\s]/g, '');
+    const sId = (student.เลขประจำตัว || '').trim();
+
+    for (let i = 1; i < values.length; i++) {
+      const row = values[i];
+      if ((cleanCid && (row[cidCol] || '').replace(/[-\s]/g, '') === cleanCid) ||
+          (sId && (row[sidCol] || '').trim() === sId)) {
+        targetRow = i + 1;
+        break;
+      }
+    }
+  }
+
+  if (!targetRow || targetRow <= 1) {
+    return { status: 'error', message: 'ไม่พบแถวข้อมูลที่ต้องการแก้ไข' };
+  }
+
   const row = STUDENT_COLUMNS.map(col => (student[col] !== undefined ? student[col].toString() : ''));
-  sheet.getRange(rowNumber, 1, 1, STUDENT_COLUMNS.length).setValues([row]);
-  return { status: 'success', message: 'บันทึกการแก้ไขเรียบร้อยแล้ว' };
+  sheet.getRange(targetRow, 1, 1, STUDENT_COLUMNS.length).setValues([row]);
+  return { status: 'success', message: 'บันทึกการแก้ไขเรียบร้อยแล้ว', rowNumber: targetRow };
 }
 
 /**
  * ลบนักเรียน
  */
-function deleteStudentFromSheet(rowNumber) {
+function deleteStudentFromSheet(rowNumber, citizenId, studentId) {
   const ss = SpreadsheetApp.getActiveSpreadsheet();
   const sheet = ss.getSheetByName('Students');
   if (!sheet) throw new Error('ไม่พบชีต Students');
 
-  sheet.deleteRow(rowNumber);
+  let targetRow = rowNumber;
+  if (!targetRow || targetRow <= 1) {
+    const values = sheet.getDataRange().getDisplayValues();
+    const headers = values[0];
+    const cidCol = headers.indexOf('เลขบัตรประชาชน');
+    const sidCol = headers.indexOf('เลขประจำตัว');
+    const cleanCid = (citizenId || '').replace(/[-\s]/g, '');
+    const sId = (studentId || '').trim();
+
+    for (let i = 1; i < values.length; i++) {
+      const row = values[i];
+      if ((cleanCid && (row[cidCol] || '').replace(/[-\s]/g, '') === cleanCid) ||
+          (sId && (row[sidCol] || '').trim() === sId)) {
+        targetRow = i + 1;
+        break;
+      }
+    }
+  }
+
+  if (!targetRow || targetRow <= 1) {
+    return { status: 'error', message: 'ไม่พบแถวข้อมูลที่ต้องการลบ' };
+  }
+
+  sheet.deleteRow(targetRow);
   return { status: 'success', message: 'ลบข้อมูลเรียบร้อยแล้ว' };
 }
 

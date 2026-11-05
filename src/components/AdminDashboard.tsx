@@ -81,6 +81,7 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
   } | null>(null);
   const [isPingingGas, setIsPingingGas] = useState(false);
   const [copiedGasUrl, setCopiedGasUrl] = useState(false);
+  const [isSyncingRealtime, setIsSyncingRealtime] = useState(false);
 
   // Form state for add/edit student
   const [formData, setFormData] = useState<Omit<StudentRecord, 'id'>>({
@@ -148,6 +149,33 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
       navigator.clipboard.writeText(gasUrlInput.trim());
       setCopiedGasUrl(true);
       setTimeout(() => setCopiedGasUrl(false), 2000);
+    }
+  };
+
+  const handleSyncRealtimeGas = async () => {
+    setIsSyncingRealtime(true);
+    setSyncStatusMsg(null);
+    try {
+      const res = await StudentRepository.fetchStudentsFromGas(gasUrlInput);
+      if (res.success && res.students.length > 0) {
+        setStudents(res.students);
+        setSyncStatusMsg({
+          text: `ดึงข้อมูลสดจาก Google Sheets สำเร็จ (${res.count} รายการ)`,
+          type: 'success',
+        });
+      } else {
+        setSyncStatusMsg({
+          text: res.message || 'ยังไม่มีข้อมูลนักเรียนในชีต Students ของ Google Sheets',
+          type: 'error',
+        });
+      }
+    } catch (err: any) {
+      setSyncStatusMsg({
+        text: err.message || 'เกิดข้อผิดพลาดในการดึงข้อมูลสดจาก Google Sheets',
+        type: 'error',
+      });
+    } finally {
+      setIsSyncingRealtime(false);
     }
   };
 
@@ -789,12 +817,12 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
                     </button>
 
                     <button
-                      onClick={handleSyncFromSheet}
-                      disabled={isSyncing || !sheetConfig.spreadsheetId}
-                      className="w-full py-2 px-3 rounded-xl bg-slate-100 hover:bg-slate-200 text-slate-800 font-medium text-xs flex items-center justify-center gap-2 transition-all cursor-pointer disabled:opacity-50"
+                      onClick={handleSyncRealtimeGas}
+                      disabled={isSyncingRealtime}
+                      className="w-full py-2.5 px-3 rounded-xl bg-emerald-600 hover:bg-emerald-700 text-white font-medium text-xs flex items-center justify-center gap-2 shadow-sm transition-all cursor-pointer disabled:opacity-50"
                     >
-                      <RefreshCw className={`w-3.5 h-3.5 ${isSyncing ? 'animate-spin' : ''}`} />
-                      <span>ซิงค์ข้อมูลล่าสุดจาก Google Sheets</span>
+                      <RefreshCw className={`w-3.5 h-3.5 ${isSyncingRealtime ? 'animate-spin' : ''}`} />
+                      <span>{isSyncingRealtime ? 'กำลังดึงข้อมูลสด...' : 'ดึงข้อมูลสด Real-time จาก Google Sheets'}</span>
                     </button>
 
                     <button
@@ -905,6 +933,16 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
               </div>
 
               <div className="flex items-center gap-2">
+                <button
+                  onClick={handleSyncRealtimeGas}
+                  disabled={isSyncingRealtime}
+                  className="px-3.5 py-2 bg-emerald-600 hover:bg-emerald-700 text-white rounded-xl text-xs font-semibold flex items-center gap-1.5 shadow-sm transition-all cursor-pointer disabled:opacity-50"
+                  title="ดึงข้อมูลสดจาก Google Sheets แบบ Real-time"
+                >
+                  <RefreshCw className={`w-3.5 h-3.5 ${isSyncingRealtime ? 'animate-spin' : ''}`} />
+                  <span>{isSyncingRealtime ? 'กำลังดึงข้อมูล...' : 'ดึงข้อมูลสดจาก Google Sheets'}</span>
+                </button>
+
                 <button
                   onClick={openAddModal}
                   className="px-4 py-2 bg-purple-700 hover:bg-purple-800 text-white rounded-xl text-xs font-semibold flex items-center gap-1.5 shadow-sm transition-all cursor-pointer"
@@ -1396,6 +1434,26 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
                     <span className="font-bold text-slate-800 block mb-1">🛡️ การปกปิดเลขบัตรประชาชน</span>
                     หน้าจอรายงานผลจะแสดงผลในรูปแบบ Masking เช่น <code className="bg-slate-200 px-1 py-0.5 rounded font-mono">1-1002-XXXXX-XX-1</code> เสมอ
                   </div>
+                </div>
+              </div>
+
+              {/* Step 5: Real-time Admin CRUD Support */}
+              <div className="p-4 rounded-xl bg-purple-50/60 border border-purple-200 space-y-2">
+                <div className="flex items-center gap-2">
+                  <span className="w-6 h-6 rounded-full bg-emerald-600 text-white text-xs font-bold flex items-center justify-center">
+                    5
+                  </span>
+                  <h4 className="text-xs font-bold text-purple-950">
+                    การจัดการข้อมูล Real-time 100% สำหรับผู้ดูแลระบบ (Admin Two-Way Real-time Sync)
+                  </h4>
+                </div>
+                <p className="text-xs text-slate-700 leading-relaxed">
+                  ผู้ดูแลระบบสามารถ <strong>เพิ่ม, แก้ไข, ลบ</strong> ข้อมูลนักเรียนจากหน้าเว็บแอป แล้วข้อมูลจะส่งตรงเข้า Google Sheets แบบ Real-time ทันที
+                  และเมื่อครูแก้ไขคะแนนใน Google Sheets โดยตรง ก็สามารถกดปุ่ม <span className="font-bold text-emerald-700">"ดึงข้อมูลสดจาก Google Sheets"</span> เพื่อให้ตารางสถิติและคะแนนอัปเดตตรงกันทันที
+                </p>
+                <div className="pt-2 text-[11px] text-purple-900 bg-white/80 p-3 rounded-lg border border-purple-100">
+                  <span className="font-bold">💡 คำแนะนำ:</span> หากต้องการให้ Google Apps Script รองรับคำสั่ง <code>getAllStudents</code>, <code>addStudent</code>, <code>updateStudent</code>, <code>deleteStudent</code> แบบเต็มรูปแบบ
+                  เพียงนำโค้ดในไฟล์ <code>gas/Code.gs</code> ไปวางทับใน Apps Script Editor แล้วกด Deploy เป็น New Version ได้ทันที
                 </div>
               </div>
             </div>

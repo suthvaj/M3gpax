@@ -339,7 +339,45 @@ export class StudentRepository {
   }
 
   /**
-   * Add student record
+   * Fetch all students in real-time from Google Apps Script Web App
+   */
+  static async fetchStudentsFromGas(
+    url?: string
+  ): Promise<{ success: boolean; count: number; students: StudentRecord[]; message?: string }> {
+    const targetUrl = url || this.getSheetConfig().gasWebAppUrl || DEFAULT_GAS_WEB_APP_URL;
+    try {
+      const res = await fetch(`${targetUrl}?action=getAllStudents`, { method: 'GET' });
+      if (!res.ok) throw new Error(`HTTP ${res.status}`);
+      const json = await res.json();
+      if (json.status === 'success' && Array.isArray(json.data) && json.data.length > 0) {
+        const mapped: StudentRecord[] = json.data.map((item: any, idx: number) => ({
+          id: `gas-${item.เลขประจำตัว || idx + 1}`,
+          rowNumber: item.rowNumber || idx + 2,
+          เลขประจำตัว: String(item.เลขประจำตัว || ''),
+          คำนำหน้า: String(item.คำนำหน้า || ''),
+          ชื่อ: String(item.ชื่อ || ''),
+          นามสกุล: String(item.นามสกุล || ''),
+          GPAX: String(item.GPAX || '0.00'),
+          เลขบัตรประชาชน: String(item.เลขบัตรประชาชน || ''),
+          คณิต: String(item.คณิต || '0.00'),
+          วิทย์: String(item.วิทย์ || '0.00'),
+          ภาษาต่างประเทศ: String(item.ภาษาต่างประเทศ || '0.00'),
+          status: 'valid',
+        }));
+        this.saveStudents(mapped);
+        const config = this.getSheetConfig();
+        config.lastSyncedAt = new Date().toLocaleString('th-TH');
+        this.saveSheetConfig(config);
+        return { success: true, count: mapped.length, students: mapped };
+      }
+      return { success: false, count: 0, students: [], message: json.message || 'ไม่มีข้อมูลในชีต Students' };
+    } catch (e: any) {
+      return { success: false, count: 0, students: [], message: e.message || 'ไม่สามารถดึงข้อมูลจาก Apps Script ได้' };
+    }
+  }
+
+  /**
+   * Add student record - Real-time sync to Google Apps Script & Google Sheets
    */
   static async addStudent(studentData: Omit<StudentRecord, 'id'>, adminUser: string): Promise<StudentRecord> {
     const students = this.getStudents();
@@ -359,21 +397,28 @@ export class StudentRepository {
       `เพิ่มข้อมูลนักเรียน: รหัส ${newRecord.เลขประจำตัว} ${newRecord.ชื่อ} ${newRecord.นามสกุล}`
     );
 
-    // Sync to Google Sheets if connected
+    // 1. Sync Real-time to Google Apps Script Web App
     const config = this.getSheetConfig();
-    if (config.spreadsheetId) {
+    const gasUrl = config.gasWebAppUrl || DEFAULT_GAS_WEB_APP_URL;
+    if (gasUrl) {
       try {
-        await GoogleSheetsService.appendStudent(config.spreadsheetId, newRecord);
-      } catch (e) {
-        console.warn('Could not sync addition to Google Sheet immediately:', e);
+        const param = encodeURIComponent(JSON.stringify(studentData));
+        fetch(`${gasUrl}?action=addStudent&adminUser=${encodeURIComponent(adminUser)}&student=${param}`).catch(() => {});
+      } catch (err) {
+        console.warn('GAS real-time add student error:', err);
       }
+    }
+
+    // 2. Sync to Google Sheets API if connected
+    if (config.spreadsheetId) {
+      GoogleSheetsService.appendStudent(config.spreadsheetId, newRecord).catch(() => {});
     }
 
     return newRecord;
   }
 
   /**
-   * Update student record
+   * Update student record - Real-time sync to Google Apps Script & Google Sheets
    */
   static async updateStudent(updatedStudent: StudentRecord, adminUser: string): Promise<boolean> {
     const students = this.getStudents();
@@ -388,25 +433,34 @@ export class StudentRepository {
       `แก้ไขข้อมูลนักเรียน รหัส ${updatedStudent.เลขประจำตัว} ${updatedStudent.ชื่อ} ${updatedStudent.นามสกุล}`
     );
 
-    // Sync to Google Sheets if connected
+    // 1. Sync Real-time to Google Apps Script Web App
     const config = this.getSheetConfig();
-    if (config.spreadsheetId && updatedStudent.rowNumber) {
+    const gasUrl = config.gasWebAppUrl || DEFAULT_GAS_WEB_APP_URL;
+    if (gasUrl) {
       try {
-        await GoogleSheetsService.updateStudent(
-          config.spreadsheetId,
-          updatedStudent.rowNumber,
-          updatedStudent
-        );
-      } catch (e) {
-        console.warn('Could not sync update to Google Sheet:', e);
+        const param = encodeURIComponent(JSON.stringify(updatedStudent));
+        fetch(
+          `${gasUrl}?action=updateStudent&adminUser=${encodeURIComponent(adminUser)}&rowNumber=${updatedStudent.rowNumber || ''}&student=${param}`
+        ).catch(() => {});
+      } catch (err) {
+        console.warn('GAS real-time update student error:', err);
       }
+    }
+
+    // 2. Sync to Google Sheets API if connected
+    if (config.spreadsheetId && updatedStudent.rowNumber) {
+      GoogleSheetsService.updateStudent(
+        config.spreadsheetId,
+        updatedStudent.rowNumber,
+        updatedStudent
+      ).catch(() => {});
     }
 
     return true;
   }
 
   /**
-   * Delete student record
+   * Delete student record - Real-time sync to Google Apps Script & Google Sheets
    */
   static async deleteStudent(studentId: string, adminUser: string): Promise<boolean> {
     const students = this.getStudents();
@@ -421,14 +475,22 @@ export class StudentRepository {
       `ลบข้อมูลนักเรียน รหัส ${target.เลขประจำตัว} ${target.ชื่อ} ${target.นามสกุล}`
     );
 
-    // Sync delete to Google Sheets if rowNumber exists
+    // 1. Sync Real-time to Google Apps Script Web App
     const config = this.getSheetConfig();
-    if (config.spreadsheetId && target.rowNumber) {
+    const gasUrl = config.gasWebAppUrl || DEFAULT_GAS_WEB_APP_URL;
+    if (gasUrl) {
       try {
-        await GoogleSheetsService.deleteStudentRow(config.spreadsheetId, target.rowNumber);
-      } catch (e) {
-        console.warn('Could not sync row deletion to Google Sheet:', e);
+        fetch(
+          `${gasUrl}?action=deleteStudent&adminUser=${encodeURIComponent(adminUser)}&rowNumber=${target.rowNumber || ''}&studentId=${encodeURIComponent(target.เลขประจำตัว)}&citizenId=${encodeURIComponent(target.เลขบัตรประชาชน)}`
+        ).catch(() => {});
+      } catch (err) {
+        console.warn('GAS real-time delete student error:', err);
       }
+    }
+
+    // 2. Sync to Google Sheets API if connected
+    if (config.spreadsheetId && target.rowNumber) {
+      GoogleSheetsService.deleteStudentRow(config.spreadsheetId, target.rowNumber).catch(() => {});
     }
 
     return true;
