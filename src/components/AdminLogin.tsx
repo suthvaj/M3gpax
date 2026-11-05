@@ -1,7 +1,16 @@
 import React, { useState } from 'react';
-import { ShieldAlert, ArrowLeft, ShieldCheck, Lock } from 'lucide-react';
+import {
+  ShieldAlert,
+  ArrowLeft,
+  ShieldCheck,
+  Lock,
+  Copy,
+  ExternalLink,
+  Check,
+} from 'lucide-react';
 import { googleSignIn } from '../services/firebaseAuth';
 import { StudentRepository } from '../services/studentRepository';
+import firebaseConfig from '../../firebase-applet-config.json';
 
 interface AdminLoginProps {
   onLoginSuccess: (user: { name: string; username: string; role: string }) => void;
@@ -11,11 +20,17 @@ interface AdminLoginProps {
 export const AdminLogin: React.FC<AdminLoginProps> = ({ onLoginSuccess, onBackToStudent }) => {
   const [isGoogleLoading, setIsGoogleLoading] = useState(false);
   const [errorMsg, setErrorMsg] = useState<string | null>(null);
+  const [isUnauthorizedDomain, setIsUnauthorizedDomain] = useState(false);
+  const [copied, setCopied] = useState(false);
+
+  const currentDomain = typeof window !== 'undefined' ? window.location.hostname : '';
+  const firebaseConsoleUrl = `https://console.firebase.google.com/project/${firebaseConfig.projectId}/authentication/settings`;
 
   // Google Workspace Sign-In (Directly connects to Google Drive & Sheets with granted scopes)
   const handleGoogleSignIn = async () => {
     setIsGoogleLoading(true);
     setErrorMsg(null);
+    setIsUnauthorizedDomain(false);
 
     try {
       const res = await googleSignIn();
@@ -34,11 +49,31 @@ export const AdminLogin: React.FC<AdminLoginProps> = ({ onLoginSuccess, onBackTo
       }
     } catch (err: any) {
       console.error('Google sign-in error:', err);
-      setErrorMsg(
-        err.message || 'การเข้าสู่ระบบผ่าน Google ไม่สำเร็จ กรุณาลองใหม่อีกครั้ง'
-      );
+      const isDomainErr =
+        err?.code === 'auth/unauthorized-domain' ||
+        err?.message?.includes('unauthorized-domain') ||
+        err?.message?.includes('auth/unauthorized-domain');
+
+      if (isDomainErr) {
+        setIsUnauthorizedDomain(true);
+        setErrorMsg(
+          `Firebase: โดเมนปัจจุบัน (${currentDomain}) ยังไม่ได้รับอนุญาตใน Firebase Console`
+        );
+      } else {
+        setErrorMsg(
+          err.message || 'การเข้าสู่ระบบผ่าน Google ไม่สำเร็จ กรุณาลองใหม่อีกครั้ง'
+        );
+      }
     } finally {
       setIsGoogleLoading(false);
+    }
+  };
+
+  const handleCopyDomain = () => {
+    if (navigator?.clipboard) {
+      navigator.clipboard.writeText(currentDomain);
+      setCopied(true);
+      setTimeout(() => setCopied(false), 2000);
     }
   };
 
@@ -48,7 +83,7 @@ export const AdminLogin: React.FC<AdminLoginProps> = ({ onLoginSuccess, onBackTo
       <div className="absolute top-1/4 left-1/3 w-96 h-96 bg-purple-600/15 rounded-full blur-3xl pointer-events-none" />
       <div className="absolute bottom-1/4 right-1/3 w-96 h-96 bg-indigo-600/15 rounded-full blur-3xl pointer-events-none" />
 
-      <div className="w-full max-w-md bg-white/95 backdrop-blur-xl rounded-2xl shadow-2xl shadow-purple-950/40 border border-white/20 p-8 relative z-10">
+      <div className="w-full max-w-lg bg-white/95 backdrop-blur-xl rounded-2xl shadow-2xl shadow-purple-950/40 border border-white/20 p-6 sm:p-8 relative z-10">
         <button
           onClick={onBackToStudent}
           className="inline-flex items-center gap-1.5 text-xs font-semibold text-purple-700 hover:text-purple-900 mb-6 transition-colors cursor-pointer"
@@ -57,7 +92,7 @@ export const AdminLogin: React.FC<AdminLoginProps> = ({ onLoginSuccess, onBackTo
           <span>กลับไปยังหน้านักเรียน</span>
         </button>
 
-        <div className="text-center mb-8">
+        <div className="text-center mb-6">
           <div className="w-12 h-12 rounded-2xl bg-purple-100 text-purple-800 flex items-center justify-center mx-auto mb-3 shadow-inner">
             <Lock className="w-6 h-6" />
           </div>
@@ -67,14 +102,55 @@ export const AdminLogin: React.FC<AdminLoginProps> = ({ onLoginSuccess, onBackTo
           </p>
         </div>
 
+        {/* Error Alert Box */}
         {errorMsg && (
-          <div className="mb-5 p-3 rounded-xl bg-rose-50 border border-rose-200 text-rose-800 text-xs flex items-center gap-2">
-            <ShieldAlert className="w-4 h-4 text-rose-600 shrink-0" />
-            <span>{errorMsg}</span>
+          <div className="mb-5 p-3.5 rounded-xl bg-rose-50 border border-rose-200 text-rose-800 text-xs space-y-2">
+            <div className="flex items-start gap-2">
+              <ShieldAlert className="w-4 h-4 text-rose-600 shrink-0 mt-0.5" />
+              <div className="font-medium">{errorMsg}</div>
+            </div>
+
+            {/* If unauthorized domain, show solution guide */}
+            {isUnauthorizedDomain && (
+              <div className="pt-2 border-t border-rose-200 text-[11px] space-y-2 text-rose-900">
+                <div className="font-semibold">วิธีแก้ไขเพื่อเปิดใช้งาน Google Sign-In:</div>
+                <ol className="list-decimal list-inside space-y-1.5 pl-1">
+                  <li>
+                    กดคัดลอกโดเมนนี้:{' '}
+                    <span className="font-mono bg-white/80 px-1.5 py-0.5 rounded border border-rose-300 font-bold select-all">
+                      {currentDomain}
+                    </span>{' '}
+                    <button
+                      type="button"
+                      onClick={handleCopyDomain}
+                      className="inline-flex items-center gap-1 px-2 py-0.5 rounded bg-rose-200 hover:bg-rose-300 text-rose-900 font-semibold cursor-pointer"
+                    >
+                      {copied ? <Check className="w-3 h-3 text-emerald-700" /> : <Copy className="w-3 h-3" />}
+                      <span>{copied ? 'คัดลอกแล้ว' : 'คัดลอก'}</span>
+                    </button>
+                  </li>
+                  <li>
+                    เปิดลิงก์{' '}
+                    <a
+                      href={firebaseConsoleUrl}
+                      target="_blank"
+                      rel="noreferrer"
+                      className="underline font-semibold inline-flex items-center gap-0.5 text-purple-900 hover:text-purple-700"
+                    >
+                      <span>Firebase Authentication Settings</span>
+                      <ExternalLink className="w-3 h-3" />
+                    </a>
+                  </li>
+                  <li>
+                    เลื่อนไปที่หัวข้อ <b>Authorized domains</b> &rarr; กดปุ่ม <b>Add domain</b> &rarr; วางโดเมนที่คัดลอกแล้วกด <b>Save</b>
+                  </li>
+                </ol>
+              </div>
+            )}
           </div>
         )}
 
-        {/* Google Workspace Sign-In Button */}
+        {/* Google Workspace Sign-In Button Only */}
         <div className="space-y-4">
           <button
             type="button"

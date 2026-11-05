@@ -21,9 +21,13 @@ import {
   X,
   RefreshCw,
   FolderOpen,
+  Globe,
+  Link2,
+  Copy,
+  Check,
 } from 'lucide-react';
 import { StudentRecord, SearchLogEntry, ActivityLogEntry, SheetConfig } from '../types/student';
-import { StudentRepository } from '../services/studentRepository';
+import { StudentRepository, DEFAULT_GAS_WEB_APP_URL } from '../services/studentRepository';
 import { GoogleSheetsService, OFFICIAL_HEADERS } from '../services/googleSheetsService';
 import { getAccessToken, logout as fbLogout } from '../services/firebaseAuth';
 import { auditStudentRecords, formatCitizenId, isValidGrade } from '../utils/validation';
@@ -67,6 +71,17 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
   const [driveSheets, setDriveSheets] = useState<Array<{ id: string; name: string }>>([]);
   const [isLoadingDrive, setIsLoadingDrive] = useState(false);
 
+  // Google Apps Script Web App live states
+  const [gasUrlInput, setGasUrlInput] = useState(DEFAULT_GAS_WEB_APP_URL);
+  const [gasPingStatus, setGasPingStatus] = useState<{
+    tested: boolean;
+    success: boolean;
+    message: string;
+    timestamp?: string;
+  } | null>(null);
+  const [isPingingGas, setIsPingingGas] = useState(false);
+  const [copiedGasUrl, setCopiedGasUrl] = useState(false);
+
   // Form state for add/edit student
   const [formData, setFormData] = useState<Omit<StudentRecord, 'id'>>({
     เลขประจำตัว: '',
@@ -84,12 +99,57 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
     setStudents(StudentRepository.getStudents());
     setSearchLogs(StudentRepository.getSearchLogs());
     setActivityLogs(StudentRepository.getActivityLogs());
-    setSheetConfig(StudentRepository.getSheetConfig());
+    const config = StudentRepository.getSheetConfig();
+    setSheetConfig(config);
+    setGasUrlInput(config.gasWebAppUrl || DEFAULT_GAS_WEB_APP_URL);
   };
 
   useEffect(() => {
     loadData();
   }, []);
+
+  const handlePingGas = async () => {
+    setIsPingingGas(true);
+    setGasPingStatus(null);
+    try {
+      const res = await StudentRepository.pingGasWebApp(gasUrlInput.trim());
+      setGasPingStatus({
+        tested: true,
+        success: res.success,
+        message: res.message,
+        timestamp: res.timestamp,
+      });
+    } catch (e: any) {
+      setGasPingStatus({
+        tested: true,
+        success: false,
+        message: e.message || 'ไม่สามารถติดต่อ Google Apps Script ได้',
+      });
+    } finally {
+      setIsPingingGas(false);
+    }
+  };
+
+  const handleSaveGasUrl = () => {
+    const updated: SheetConfig = {
+      ...sheetConfig,
+      gasWebAppUrl: gasUrlInput.trim(),
+    };
+    StudentRepository.saveSheetConfig(updated);
+    setSheetConfig(updated);
+    setSyncStatusMsg({
+      text: 'บันทึก URL Google Apps Script เรียบร้อยแล้ว',
+      type: 'success',
+    });
+  };
+
+  const handleCopyGasUrl = () => {
+    if (navigator.clipboard) {
+      navigator.clipboard.writeText(gasUrlInput.trim());
+      setCopiedGasUrl(true);
+      setTimeout(() => setCopiedGasUrl(false), 2000);
+    }
+  };
 
   // Compute integrity report
   const integrityReport = useMemo(() => {
@@ -1093,79 +1153,279 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
           </div>
         )}
 
-        {/* ---------------- 4. TAB: GOOGLE SHEETS & DRIVE ---------------- */}
+        {/* ---------------- 4. TAB: GOOGLE SHEETS & APPS SCRIPT ---------------- */}
         {activeTab === 'sheets' && (
           <div className="space-y-6">
-            <div className="bg-white p-6 rounded-2xl border border-slate-200 shadow-sm">
-              <div className="flex items-center justify-between mb-4">
+            {/* Live Google Apps Script Connection Card */}
+            <div className="bg-white p-6 rounded-2xl border border-slate-200 shadow-sm space-y-5">
+              <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3 pb-4 border-b border-slate-100">
                 <div>
-                  <h3 className="font-bold text-slate-900 text-base flex items-center gap-2">
-                    <FileSpreadsheet className="w-5 h-5 text-emerald-600" />
-                    <span>การเชื่อมต่อ Google Sheets & Google Drive</span>
-                  </h3>
+                  <div className="flex items-center gap-2">
+                    <span className="flex h-2.5 w-2.5 relative">
+                      <span className="animate-ping absolute inline-flex h-full w-full rounded-full bg-emerald-400 opacity-75"></span>
+                      <span className="relative inline-flex rounded-full h-2.5 w-2.5 bg-emerald-500"></span>
+                    </span>
+                    <h3 className="font-bold text-slate-900 text-base flex items-center gap-2">
+                      <FileSpreadsheet className="w-5 h-5 text-purple-700" />
+                      <span>สถานะการเชื่อมต่อ Google Sheets (ผ่าน Google Apps Script)</span>
+                    </h3>
+                  </div>
                   <p className="text-xs text-slate-500 mt-1">
-                    ระบบเชื่อมต่อโดยตรงกับ Google Sheets API และ Google Drive ผ่านบัญชี Google Workspace ของท่าน
+                    เชื่อมต่อฐานข้อมูลคะแนนและคุณสมบัตินักเรียน ม.4 ปีการศึกษา 2570 แบบ Real-time
                   </p>
                 </div>
-              </div>
 
-              {/* Current Connection Status Box */}
-              <div className="p-4 rounded-xl bg-purple-50 border border-purple-200 mb-6 flex flex-col sm:flex-row items-start sm:items-center justify-between gap-4">
-                <div>
-                  <div className="text-xs font-semibold text-purple-900">Google Spreadsheet ที่เชื่อมต่ออยู่:</div>
-                  <div className="text-base font-bold text-slate-900 mt-0.5">
-                    {sheetConfig.spreadsheetTitle || 'ยังไม่ได้เลือกไฟล์'}
-                  </div>
-                  {sheetConfig.spreadsheetId && (
-                    <div className="text-xs font-mono text-slate-500 mt-0.5">
-                      ID: {sheetConfig.spreadsheetId}
-                    </div>
-                  )}
-                  {sheetConfig.lastSyncedAt && (
-                    <div className="text-[11px] text-purple-700 mt-1">
-                      ซิงค์ล่าสุด: {sheetConfig.lastSyncedAt}
-                    </div>
-                  )}
-                </div>
-
-                <div className="flex flex-wrap gap-2">
-                  {sheetConfig.spreadsheetUrl && (
-                    <a
-                      href={sheetConfig.spreadsheetUrl}
-                      target="_blank"
-                      rel="noreferrer"
-                      className="px-3 py-1.5 rounded-lg bg-white border border-purple-200 text-purple-800 hover:bg-purple-100 text-xs font-semibold flex items-center gap-1.5 transition-colors cursor-pointer"
-                    >
-                      <ExternalLink className="w-3.5 h-3.5" />
-                      <span>เปิดใน Google Sheets</span>
-                    </a>
-                  )}
-
+                <div className="flex items-center gap-2">
                   <button
-                    onClick={handleSyncFromSheet}
-                    disabled={isSyncing || !sheetConfig.spreadsheetId}
-                    className="px-3 py-1.5 rounded-lg bg-purple-700 hover:bg-purple-800 text-white text-xs font-semibold flex items-center gap-1.5 shadow-sm transition-all cursor-pointer disabled:opacity-50"
+                    onClick={handlePingGas}
+                    disabled={isPingingGas}
+                    className="px-3.5 py-2 rounded-xl bg-purple-700 hover:bg-purple-800 text-white font-semibold text-xs transition-colors flex items-center gap-1.5 shadow-sm cursor-pointer disabled:opacity-50"
                   >
-                    <RefreshCw className={`w-3.5 h-3.5 ${isSyncing ? 'animate-spin' : ''}`} />
-                    <span>ซิงค์ข้อมูล</span>
+                    <RefreshCw className={`w-3.5 h-3.5 ${isPingingGas ? 'animate-spin' : ''}`} />
+                    <span>{isPingingGas ? 'กำลังตรวจสอบ...' : 'ทดสอบการเชื่อมต่อ (Ping Live)'}</span>
                   </button>
                 </div>
               </div>
 
-              {/* Actions: Create New Sheet or Select Existing from Drive */}
-              <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
-                {/* Option 1: 1-Click Create Official Sheet */}
+              {/* Ping Result Banner */}
+              {gasPingStatus && (
+                <div
+                  className={`p-3.5 rounded-xl border flex items-center justify-between text-xs animate-fadeIn ${
+                    gasPingStatus.success
+                      ? 'bg-emerald-50 border-emerald-200 text-emerald-800'
+                      : 'bg-rose-50 border-rose-200 text-rose-800'
+                  }`}
+                >
+                  <div className="flex items-center gap-2">
+                    {gasPingStatus.success ? (
+                      <CheckCircle className="w-4 h-4 text-emerald-600 shrink-0" />
+                    ) : (
+                      <AlertTriangle className="w-4 h-4 text-rose-600 shrink-0" />
+                    )}
+                    <div>
+                      <span className="font-semibold">{gasPingStatus.message}</span>
+                      {gasPingStatus.timestamp && (
+                        <span className="text-[11px] opacity-75 ml-2">
+                          (เวลาตอบกลับ: {new Date(gasPingStatus.timestamp).toLocaleTimeString('th-TH')})
+                        </span>
+                      )}
+                    </div>
+                  </div>
+                  <span className="px-2 py-0.5 rounded text-[10px] font-bold uppercase bg-white/70">
+                    {gasPingStatus.success ? 'HTTP 200 OK' : 'ERROR'}
+                  </span>
+                </div>
+              )}
+
+              {/* Deployed Web App URL Configuration */}
+              <div className="space-y-2">
+                <label className="text-xs font-bold text-slate-700 flex items-center justify-between">
+                  <span>Google Apps Script Web App Endpoint URL:</span>
+                  <span className="text-[11px] font-normal text-emerald-600 bg-emerald-50 px-2 py-0.5 rounded-full border border-emerald-200">
+                    ● เชื่อมต่อใช้งานอยู่ (Active)
+                  </span>
+                </label>
+                <div className="flex flex-col sm:flex-row items-stretch gap-2">
+                  <div className="relative flex-1">
+                    <input
+                      type="text"
+                      value={gasUrlInput}
+                      onChange={(e) => setGasUrlInput(e.target.value)}
+                      placeholder="https://script.google.com/macros/s/.../exec"
+                      className="w-full px-3.5 py-2.5 rounded-xl border border-slate-300 bg-slate-50 text-slate-800 text-xs font-mono focus:bg-white focus:outline-none focus:ring-2 focus:ring-purple-500"
+                    />
+                  </div>
+                  <div className="flex gap-2">
+                    <button
+                      type="button"
+                      onClick={handleCopyGasUrl}
+                      className="px-3 py-2 rounded-xl border border-slate-300 hover:bg-slate-100 text-slate-700 text-xs font-semibold flex items-center gap-1.5 transition-colors cursor-pointer"
+                      title="คัดลอก URL"
+                    >
+                      {copiedGasUrl ? (
+                        <>
+                          <Check className="w-3.5 h-3.5 text-emerald-600" />
+                          <span className="text-emerald-700">คัดลอกแล้ว</span>
+                        </>
+                      ) : (
+                        <>
+                          <Copy className="w-3.5 h-3.5" />
+                          <span>คัดลอก</span>
+                        </>
+                      )}
+                    </button>
+                    <button
+                      type="button"
+                      onClick={handleSaveGasUrl}
+                      className="px-4 py-2 rounded-xl bg-purple-700 hover:bg-purple-800 text-white text-xs font-semibold flex items-center gap-1.5 transition-colors cursor-pointer shadow-sm"
+                    >
+                      <Save className="w-3.5 h-3.5" />
+                      <span>บันทึก URL</span>
+                    </button>
+                  </div>
+                </div>
+                <p className="text-[11px] text-slate-500">
+                  * เมื่อมีการ Deploy เวอร์ชันใหม่ใน Apps Script สามารถนำ URL มาอัปเดตที่นี่ได้ตลอดเวลา
+                </p>
+              </div>
+            </div>
+
+            {/* Official Step-by-Step Guide for Google Sheets */}
+            <div className="bg-white p-6 rounded-2xl border border-slate-200 shadow-sm space-y-6">
+              <div>
+                <h3 className="font-bold text-slate-900 text-base">
+                  วิธีการเชื่อมต่อและบันทึกข้อมูลใน Google Sheets
+                </h3>
+                <p className="text-xs text-slate-500 mt-1">
+                  คู่มือสำหรับครูผู้รับผิดชอบงานทะเบียนและวัดผล โรงเรียนมัธยมประชานิเวศน์
+                </p>
+              </div>
+
+              {/* Step 1: 9 Columns Structure */}
+              <div className="space-y-3">
+                <div className="flex items-center gap-2">
+                  <span className="w-6 h-6 rounded-full bg-purple-700 text-white text-xs font-bold flex items-center justify-center">
+                    1
+                  </span>
+                  <h4 className="text-xs font-bold text-slate-800">
+                    โครงสร้างชีตชื่อ "Students" กำหนด 9 คอลัมน์มาตรฐาน (ห้ามสลับหรือแก้ไขชื่อ)
+                  </h4>
+                </div>
+                <div className="overflow-x-auto rounded-xl border border-purple-200 bg-purple-50/30">
+                  <table className="w-full text-xs text-left">
+                    <thead>
+                      <tr className="bg-purple-800 text-white">
+                        <th className="py-2 px-2.5 font-bold text-center border-r border-purple-700">A (1)</th>
+                        <th className="py-2 px-2.5 font-bold text-center border-r border-purple-700">B (2)</th>
+                        <th className="py-2 px-2.5 font-bold text-center border-r border-purple-700">C (3)</th>
+                        <th className="py-2 px-2.5 font-bold text-center border-r border-purple-700">D (4)</th>
+                        <th className="py-2 px-2.5 font-bold text-center border-r border-purple-700">E (5)</th>
+                        <th className="py-2 px-2.5 font-bold text-center border-r border-purple-700">F (6)</th>
+                        <th className="py-2 px-2.5 font-bold text-center border-r border-purple-700">G (7)</th>
+                        <th className="py-2 px-2.5 font-bold text-center border-r border-purple-700">H (8)</th>
+                        <th className="py-2 px-2.5 font-bold text-center">I (9)</th>
+                      </tr>
+                    </thead>
+                    <tbody>
+                      <tr className="font-bold text-slate-800 bg-white border-b border-purple-100">
+                        <td className="py-2.5 px-2.5 border-r border-purple-100 text-center">เลขประจำตัว</td>
+                        <td className="py-2.5 px-2.5 border-r border-purple-100 text-center">คำนำหน้า</td>
+                        <td className="py-2.5 px-2.5 border-r border-purple-100 text-center">ชื่อ</td>
+                        <td className="py-2.5 px-2.5 border-r border-purple-100 text-center">นามสกุล</td>
+                        <td className="py-2.5 px-2.5 border-r border-purple-100 text-center text-purple-900 font-extrabold">GPAX</td>
+                        <td className="py-2.5 px-2.5 border-r border-purple-100 text-center text-indigo-900 font-extrabold">เลขบัตรประชาชน</td>
+                        <td className="py-2.5 px-2.5 border-r border-purple-100 text-center">คณิต</td>
+                        <td className="py-2.5 px-2.5 border-r border-purple-100 text-center">วิทย์</td>
+                        <td className="py-2.5 px-2.5 text-center">ภาษาต่างประเทศ</td>
+                      </tr>
+                      <tr className="text-slate-600 bg-slate-50/50 text-[11px] font-mono">
+                        <td className="py-2 px-2.5 border-r border-purple-100 text-center">04501</td>
+                        <td className="py-2 px-2.5 border-r border-purple-100 text-center">เด็กชาย</td>
+                        <td className="py-2 px-2.5 border-r border-purple-100 text-center">กิตติพงษ์</td>
+                        <td className="py-2 px-2.5 border-r border-purple-100 text-center">เจริญทรัพย์</td>
+                        <td className="py-2 px-2.5 border-r border-purple-100 text-center font-bold text-emerald-700">3.85</td>
+                        <td className="py-2 px-2.5 border-r border-purple-100 text-center">1100201234561</td>
+                        <td className="py-2 px-2.5 border-r border-purple-100 text-center">3.50</td>
+                        <td className="py-2 px-2.5 border-r border-purple-100 text-center">4.00</td>
+                        <td className="py-2 px-2.5 text-center">3.75</td>
+                      </tr>
+                    </tbody>
+                  </table>
+                </div>
+              </div>
+
+              {/* Step 2: Plain Text Formatting */}
+              <div className="space-y-2">
+                <div className="flex items-center gap-2">
+                  <span className="w-6 h-6 rounded-full bg-purple-700 text-white text-xs font-bold flex items-center justify-center">
+                    2
+                  </span>
+                  <h4 className="text-xs font-bold text-slate-800">
+                    การตั้งค่ารูปแบบ Plain Text เพื่อป้องกันเลข 0 นำหน้าสูญหาย
+                  </h4>
+                </div>
+                <div className="p-4 rounded-xl bg-amber-50 border border-amber-200 text-xs text-amber-900 space-y-1.5 leading-relaxed">
+                  <p className="font-semibold">⚠️ จุดที่ต้องระวังเป็นพิเศษใน Google Sheets:</p>
+                  <ul className="list-disc list-inside space-y-1 text-slate-700">
+                    <li>
+                      คลิกเลือกทั้งคอลัมน์ <strong>A (เลขประจำตัว)</strong> และ <strong>F (เลขบัตรประชาชน)</strong>
+                    </li>
+                    <li>
+                      ไปที่เมนูบนของ Google Sheets: <strong>รูปแบบ (Format)</strong> &gt; <strong>ตัวเลข (Number)</strong> &gt; เลือก <strong>ข้อความธรรมดา (Plain Text)</strong>
+                    </li>
+                    <li>
+                      หรือพิมพ์เครื่องหมาย <code>'</code> นำหน้า เช่น <code>'04501</code> และ <code>'0105556012345</code> เพื่อไม่ให้ Google Sheets ตัดเลข 0 หน้าสุดทิ้ง
+                    </li>
+                  </ul>
+                </div>
+              </div>
+
+              {/* Step 3: Real-time search mechanism */}
+              <div className="space-y-2">
+                <div className="flex items-center gap-2">
+                  <span className="w-6 h-6 rounded-full bg-purple-700 text-white text-xs font-bold flex items-center justify-center">
+                    3
+                  </span>
+                  <h4 className="text-xs font-bold text-slate-800">
+                    การตรวจสอบคุณสมบัติแบบเรียลไทม์ (Live Search)
+                  </h4>
+                </div>
+                <p className="text-xs text-slate-600 leading-relaxed">
+                  เมื่อนักเรียนกรอกเลขบัตรประชาชน 13 หลักที่หน้าเว็บหลัก ระบบจะส่งคำขอค้นหาไปยัง Web App URL โดยตรง
+                  หากมีข้อมูลใน Google Sheet ระบบจะประมวลผล GPAX (5 ภาคเรียน) และคะแนนเฉลี่ย 3 กลุ่มสาระวิชา
+                  (คณิตศาสตร์, วิทยาศาสตร์, ภาษาต่างประเทศ) พร้อมทั้งออกรหัสตรวจสอบคุณสมบัติ (Verification Code) ให้ทันที
+                </p>
+              </div>
+
+              {/* Step 4: Security & Privacy */}
+              <div className="space-y-2">
+                <div className="flex items-center gap-2">
+                  <span className="w-6 h-6 rounded-full bg-purple-700 text-white text-xs font-bold flex items-center justify-center">
+                    4
+                  </span>
+                  <h4 className="text-xs font-bold text-slate-800">
+                    ความปลอดภัยและการคุ้มครองข้อมูลส่วนบุคคล (PDPA Compliance)
+                  </h4>
+                </div>
+                <div className="grid grid-cols-1 sm:grid-cols-2 gap-3 text-xs text-slate-600">
+                  <div className="p-3 rounded-xl bg-slate-50 border border-slate-200">
+                    <span className="font-bold text-slate-800 block mb-1">🔒 ป้องกันการเข้าถึงข้อมูลข้ามคน</span>
+                    ระบบจะส่งผลลัพธ์เฉพาะนักเรียนที่มีเลขบัตรประชาชนตรงกันเท่านั้น และไม่เปิดเผยรายชื่อผู้อื่น
+                  </div>
+                  <div className="p-3 rounded-xl bg-slate-50 border border-slate-200">
+                    <span className="font-bold text-slate-800 block mb-1">🛡️ การปกปิดเลขบัตรประชาชน</span>
+                    หน้าจอรายงานผลจะแสดงผลในรูปแบบ Masking เช่น <code className="bg-slate-200 px-1 py-0.5 rounded font-mono">1-1002-XXXXX-XX-1</code> เสมอ
+                  </div>
+                </div>
+              </div>
+            </div>
+
+            {/* Google Drive Integration Option */}
+            <div className="bg-white p-6 rounded-2xl border border-slate-200 shadow-sm space-y-4">
+              <div className="flex items-center justify-between">
+                <div>
+                  <h3 className="font-bold text-slate-900 text-base flex items-center gap-2">
+                    <FolderOpen className="w-5 h-5 text-indigo-600" />
+                    <span>จัดการไฟล์ Google Spreadsheet ผ่าน Google Drive</span>
+                  </h3>
+                  <p className="text-xs text-slate-500 mt-1">
+                    เชื่อมโยงโดยตรงกับ Google Drive ของบัญชีผู้ดูแลระบบ เพื่อสร้างไฟล์สำรองหรือนำเข้าชุดข้อมูล
+                  </p>
+                </div>
+              </div>
+
+              <div className="grid grid-cols-1 md:grid-cols-2 gap-4 pt-2">
+                {/* 1-Click Create Official Sheet */}
                 <div className="p-5 rounded-xl border-2 border-dashed border-purple-200 hover:border-purple-400 bg-slate-50/50 transition-all space-y-3">
                   <div className="w-10 h-10 rounded-xl bg-purple-100 text-purple-800 flex items-center justify-center">
                     <Plus className="w-5 h-5" />
                   </div>
                   <div>
                     <h4 className="font-bold text-slate-900 text-sm">
-                      1. สร้าง Google Spreadsheet ใหม่ใน Google Drive ทันที
+                      สร้าง Google Spreadsheet ไฟล์ใหม่ใน Google Drive
                     </h4>
                     <p className="text-xs text-slate-500 mt-1 leading-relaxed">
-                      ระบบจะสร้างไฟล์ใน Drive ของคุณอัตโนมัติ พร้อมตั้งค่า 9 คอลัมน์มาตรฐาน,
-                      สร้างชีต Students, SearchLogs, ActivityLogs, และนำเข้าข้อมูล 300 คนทันที
+                      ระบบจะสร้างชีต Students, SearchLogs, ActivityLogs, และ Settings พร้อมคอลัมน์มาตรฐานทั้ง 9 คอลัมน์ให้อัตโนมัติ
                     </p>
                   </div>
                   <button
@@ -1178,24 +1438,23 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
                     ) : (
                       <>
                         <FileSpreadsheet className="w-4 h-4" />
-                        <span>กดสร้าง Google Sheet ใหม่ใน Drive</span>
+                        <span>สร้าง Google Sheet ใหม่ใน Drive</span>
                       </>
                     )}
                   </button>
                 </div>
 
-                {/* Option 2: Select from Drive */}
+                {/* Select from Drive */}
                 <div className="p-5 rounded-xl border border-slate-200 bg-white space-y-3">
                   <div className="w-10 h-10 rounded-xl bg-indigo-100 text-indigo-800 flex items-center justify-center">
                     <FolderOpen className="w-5 h-5" />
                   </div>
                   <div>
                     <h4 className="font-bold text-slate-900 text-sm">
-                      2. เลือก Google Spreadsheet จาก Google Drive ของคุณ
+                      เลือก Google Spreadsheet ที่มีอยู่แล้วจาก Google Drive
                     </h4>
                     <p className="text-xs text-slate-500 mt-1 leading-relaxed">
-                      หากมีไฟล์ Excel หรือ Google Sheet ที่ได้นำเข้าไว้แล้ว
-                      สามารถค้นหาและเชื่อมโยงกับระบบได้โดยตรง
+                      ค้นหาไฟล์ Google Sheets หรือไฟล์ Excel ที่อัปโหลดไว้แล้วใน Drive ของท่าน
                     </p>
                   </div>
                   <button
@@ -1217,9 +1476,9 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
 
               {/* Drive Spreadsheets List if fetched */}
               {driveSheets.length > 0 && (
-                <div className="mt-6 pt-5 border-t border-slate-200">
+                <div className="mt-4 pt-4 border-t border-slate-200">
                   <h4 className="text-xs font-bold text-slate-800 mb-2">
-                    ไฟล์ Google Spreadsheets ใน Google Drive ของคุณ:
+                    ไฟล์ Google Spreadsheets ใน Google Drive ของท่าน:
                   </h4>
                   <div className="divide-y divide-slate-100 border border-slate-200 rounded-xl overflow-hidden max-h-60 overflow-y-auto">
                     {driveSheets.map((file) => (

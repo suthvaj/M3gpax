@@ -41,6 +41,9 @@ const DEFAULT_ADMINS: AdminUser[] = [
   },
 ];
 
+export const DEFAULT_GAS_WEB_APP_URL =
+  'https://script.google.com/macros/s/AKfycbySU4zEuRgWMyhfbpXpnLC_mu5uDPaEdRevctjHUJNgj-r28TQjp9uHgQORXEphsgg4/exec';
+
 export class StudentRepository {
   /**
    * Load students from storage or initialize with baseline 300 records
@@ -75,14 +78,22 @@ export class StudentRepository {
   static getSheetConfig(): SheetConfig {
     try {
       const saved = localStorage.getItem(STORAGE_KEYS.SHEET_CONFIG);
-      if (saved) return JSON.parse(saved);
+      if (saved) {
+        const parsed = JSON.parse(saved);
+        if (!parsed.gasWebAppUrl) {
+          parsed.gasWebAppUrl = DEFAULT_GAS_WEB_APP_URL;
+        }
+        return parsed;
+      }
     } catch (e) {}
 
     return {
       spreadsheetId: '',
-      spreadsheetTitle: 'ยังไม่ได้เชื่อมต่อ Google Sheet',
+      spreadsheetTitle: 'Google Sheets (เชื่อมต่อผ่าน Google Apps Script)',
       spreadsheetUrl: '',
-      syncMode: 'google-api',
+      gasWebAppUrl: DEFAULT_GAS_WEB_APP_URL,
+      syncMode: 'gas-webapp',
+      lastSyncedAt: new Date().toLocaleString('th-TH'),
     };
   }
 
@@ -91,7 +102,30 @@ export class StudentRepository {
   }
 
   /**
+   * Ping Google Apps Script Web App to verify live connection
+   */
+  static async pingGasWebApp(url?: string): Promise<{ success: boolean; message: string; timestamp?: string }> {
+    const targetUrl = url || this.getSheetConfig().gasWebAppUrl || DEFAULT_GAS_WEB_APP_URL;
+    try {
+      const res = await fetch(`${targetUrl}?action=ping`, { method: 'GET' });
+      if (!res.ok) throw new Error(`HTTP ${res.status}`);
+      const json = await res.json();
+      if (json.status === 'success') {
+        return {
+          success: true,
+          message: json.message || 'ระบบพร้อมใช้งาน',
+          timestamp: json.timestamp,
+        };
+      }
+      return { success: false, message: json.message || 'การตอบกลับไม่ถูกต้อง' };
+    } catch (e: any) {
+      return { success: false, message: e.message || 'ไม่สามารถติดต่อ Google Apps Script ได้' };
+    }
+  }
+
+  /**
    * Search student by 13-digit citizen ID with rate-limiting and security protection
+   * Prioritizes live query to Google Apps Script (Google Sheets), with graceful local fallback
    */
   static async searchByCitizenId(rawCitizenId: string): Promise<StudentSearchResult> {
     const cleanId = (rawCitizenId || '').replace(/[-\s]/g, '').trim();
@@ -126,14 +160,57 @@ export class StudentRepository {
       };
     }
 
-    // 3. Search in current database
+    const masked = maskCitizenId(cleanId);
+    const config = this.getSheetConfig();
+    const gasUrl = config.gasWebAppUrl || DEFAULT_GAS_WEB_APP_URL;
+
+    // 3. First attempt: Query live Google Apps Script connected to Google Sheets
+    if (gasUrl) {
+      try {
+        const controller = new AbortController();
+        const timeoutId = setTimeout(() => controller.abort(), 6500);
+        const res = await fetch(`${gasUrl}?action=searchStudent&citizenId=${encodeURIComponent(cleanId)}`, {
+          signal: controller.signal,
+          headers: { Accept: 'application/json' },
+        });
+        clearTimeout(timeoutId);
+
+        if (res.ok) {
+          const json = await res.json();
+          if (json.status === 'success' && json.data) {
+            const studentData = json.data;
+            this.addSearchLog(masked, 'FOUND', `พบข้อมูลนักเรียน รหัส ${studentData.เลขประจำตัว} (Google Sheets)`);
+            const verificationCode = `PNW70-Q${studentData.เลขประจำตัว}-${cleanId.slice(-4)}`;
+            return {
+              found: true,
+              student: {
+                id: `gas-${studentData.เลขประจำตัว}`,
+                เลขประจำตัว: String(studentData.เลขประจำตัว || ''),
+                คำนำหน้า: String(studentData.คำนำหน้า || ''),
+                ชื่อ: String(studentData.ชื่อ || ''),
+                นามสกุล: String(studentData.นามสกุล || ''),
+                maskedCitizenId: masked,
+                GPAX: String(studentData.GPAX || '0.00'),
+                คณิต: String(studentData.คณิต || '0.00'),
+                วิทย์: String(studentData.วิทย์ || '0.00'),
+                ภาษาต่างประเทศ: String(studentData.ภาษาต่างประเทศ || '0.00'),
+                quotaEligible: parseFloat(studentData.GPAX) >= 2.0,
+                verificationCode,
+              },
+            };
+          }
+        }
+      } catch (e) {
+        console.warn('GAS live lookup timeout or network issue, checking local database:', e);
+      }
+    }
+
+    // 4. Secondary lookup: Search in local database
     const students = this.getStudents();
     const matched = students.find((s) => {
       const sCid = (s.เลขบัตรประชาชน || '').replace(/[-\s]/g, '').trim();
       return sCid === cleanId;
     });
-
-    const masked = maskCitizenId(cleanId);
 
     if (!matched) {
       this.addSearchLog(masked, 'NOT_FOUND', 'ไม่พบข้อมูลในระบบ');
@@ -143,7 +220,7 @@ export class StudentRepository {
       };
     }
 
-    // 4. Success - Log found and return restricted student record
+    // 5. Success from local - Log found and return restricted student record
     this.addSearchLog(masked, 'FOUND', `พบข้อมูลนักเรียน รหัส ${matched.เลขประจำตัว}`);
 
     // Generate unique verification code for admission quota verification
